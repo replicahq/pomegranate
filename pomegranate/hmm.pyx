@@ -1373,7 +1373,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		return log_probability
 
 	cdef double _vl_log_probability(self, double* sequence, int n) nogil:
-		cdef double* f = self._forward(sequence, n, NULL)
+		cdef double* f = self._forward(sequence, NULL, n, NULL)
 		cdef double log_probability
 		cdef int i, m = self.n_states
 
@@ -1387,7 +1387,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(f)
 		return log_probability
 
-	cpdef numpy.ndarray forward(self, sequence):
+	cpdef numpy.ndarray forward(self, sequence, priors):
 		"""Run the forward algorithm on the sequence.
 
 		Calculate the probability of each observation being aligned to each
@@ -1433,8 +1433,11 @@ cdef class HiddenMarkovModel(GraphModel):
 		sequence_ndarray = _check_input(sequence, self)
 		sequence_data = <double*> sequence_ndarray.data
 
+		cdef numpy.ndarray priors_ndarray = numpy.array(priors, dtype=numpy.float64)
+		cdef double* priors_data = <double*> priors_ndarray.data
+
 		with nogil:
-			f = <double*> self._forward(sequence_data, n, NULL)
+			f = <double*> self._forward(sequence_data, priors_data, n, NULL)
 
 		for i in range(n+1):
 			for j in range(m):
@@ -1443,7 +1446,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(f)
 		return f_ndarray
 
-	cdef double* _forward(self, double* sequence, int n, double* emissions) nogil:
+	cdef double* _forward(self, double* sequence, double* priors, int n, double* emissions) nogil:
 		cdef int i, k, ki, l, li
 		cdef int p = self.silent_start, m = self.n_states
 		cdef int dim = self.d
@@ -1517,7 +1520,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				# Now set the table entry for log probability of emitting
 				# index+1 characters and ending in state l
-				f[(i+1)*m + l] = log_probability + e[i + l*n]
+				f[(i+1)*m + l] = log_probability + e[i + l*n] + _log(priors[i + l*n])
 
 			for l in range(self.silent_start, m):
 				# Now do the first pass over the silent states
@@ -1883,7 +1886,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				e[l*n + i] += self.state_weights[l]
 
-		f = self._forward(sequence, n, e)
+		f = self._forward(sequence, NULL, n, e)
 		b = self._backward(sequence, n, e)
 
 		if self.finite == 1:
@@ -2313,7 +2316,7 @@ cdef class HiddenMarkovModel(GraphModel):
 			e = emissions
 
 		# Fill in both the F and B DP matrices.
-		f = self._forward(sequence, n, emissions)
+		f = self._forward(sequence, NULL, n, emissions)
 		b = self._backward(sequence, n, emissions)
 
 		# Find out the probability of the sequence
@@ -2859,7 +2862,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				e[l*n + i] += self.state_weights[l]
 
-		f = self._forward(sequence, n, e)
+		f = self._forward(sequence, NULL, n, e)
 		b = self._backward(sequence, n, e)
 
 		if self.finite == 1:

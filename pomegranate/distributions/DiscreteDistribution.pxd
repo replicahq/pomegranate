@@ -10,7 +10,7 @@ cdef class DiscreteDistribution(Distribution):
 	cdef bint encoded_summary
 	cdef int n
 	cdef str dtype
-	cdef dict dist, log_dist
+	cdef public dict dist, log_dist
 	cdef tuple encoded_keys
 	cdef double* encoded_counts
 	cdef double* encoded_log_probability
