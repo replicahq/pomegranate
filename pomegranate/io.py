@@ -170,7 +170,7 @@ class SequenceGenerator(BaseGenerator):
 		The set of labels for each example in the data set. Default is None.
 	"""
 	
-	def __init__(self, X, weights=None, y=None, batches_per_epoch=None):
+	def __init__(self, X, weights=None, priors=None, y=None, batches_per_epoch=None):
 		self.X = X
 		self.y = y
 		self.idx = 0
@@ -179,6 +179,11 @@ class SequenceGenerator(BaseGenerator):
 			self.weights = numpy.ones(len(X), dtype='float64')
 		else:
 			self.weights = weights
+
+		if priors is None:
+			self.priors = [None for i in range(len(X))]
+		else:
+			self.priors = priors
 
 		if batches_per_epoch is None:
 			self.batches_per_epoch = float("inf")
@@ -213,24 +218,28 @@ class SequenceGenerator(BaseGenerator):
 	def batches(self):
 		for idx in range(len(self)):
 			if self.y is not None:
-				yield self.X[idx:idx+1], self.weights[idx:idx+1], self.y[idx:idx+1]
+				yield (self.X[idx:idx+1], self.weights[idx:idx+1], 
+					self.priors[idx:idx+1], self.y[idx:idx+1])
 			else:
-				yield self.X[idx:idx+1], self.weights[idx:idx+1]
+				yield (self.X[idx:idx+1], self.weights[idx:idx+1],
+					self.priors[idx:idx+1])
 
 	def labeled_batches(self):
 		X = [x for x, y in zip(self.X, self.y) if y is not None]
 		weights = [w for w, y in zip(self.weights, self.y) if y is not None]
+		priors = [p for p, y in zip(self.priors, self.y) if y is not None]
 		y = [y for y in self.y if y is not None]
 
 		for idx in range(len(X)):
-			yield X[idx:idx+1], weights[idx:idx+1], y[idx:idx+1]
+			yield X[idx:idx+1], weights[idx:idx+1], priors[idx:idx+1], y[idx:idx+1]
 
 	def unlabeled_batches(self):
 		X = [x for x, y in zip(self.X, self.y) if y is None]
 		weights = [w for w, y in zip(self.weights, self.y) if y is None]
+		priors = [p for p, y in zip(self.priors, self.y) if y is None]
 
 		for idx in range(len(X)):
-			yield X[idx:idx+1], weights[idx:idx+1]
+			yield X[idx:idx+1], weights[idx:idx+1], priors[idx:idx+1]
 
 class DataFrameGenerator(BaseGenerator):
 	"""A generator that returns batches of sequences from a DataFrame.

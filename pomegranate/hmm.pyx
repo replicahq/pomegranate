@@ -1387,7 +1387,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(f)
 		return log_probability
 
-	cpdef numpy.ndarray forward(self, sequence, priors):
+	cpdef numpy.ndarray forward(self, sequence, priors=None):
 		"""Run the forward algorithm on the sequence.
 
 		Calculate the probability of each observation being aligned to each
@@ -1422,8 +1422,9 @@ cdef class HiddenMarkovModel(GraphModel):
 		if self.d == 0:
 			raise ValueError("must bake model before using forward algorithm")
 
-		cdef numpy.ndarray sequence_ndarray
+		cdef numpy.ndarray sequence_ndarray, priors_ndarray
 		cdef double* sequence_data
+		cdef double* priors_data = NULL
 		cdef int n = len(sequence), m = len(self.states)
 		cdef int mv = self.multivariate
 		cdef void** distributions = <void**> self.distributions.data
@@ -1433,8 +1434,9 @@ cdef class HiddenMarkovModel(GraphModel):
 		sequence_ndarray = _check_input(sequence, self)
 		sequence_data = <double*> sequence_ndarray.data
 
-		cdef numpy.ndarray priors_ndarray = numpy.array(priors, dtype=numpy.float64)
-		cdef double* priors_data = <double*> priors_ndarray.data
+		if priors is not None:
+			priors_ndarray = numpy.log(numpy.array(priors, dtype=numpy.float64, order='F'))
+			priors_data = <double*> priors_ndarray.data
 
 		with nogil:
 			f = <double*> self._forward(sequence_data, priors_data, n, NULL)
@@ -1448,7 +1450,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 	cdef double* _forward(self, double* sequence, double* priors, int n, double* emissions) nogil:
 		cdef int i, k, ki, l, li
-		cdef int p = self.silent_start, m = self.n_states
+		cdef int m = self.n_states
 		cdef int dim = self.d
 
 		cdef void** distributions = <void**> self.distributions_ptr
@@ -1457,6 +1459,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		cdef int* in_edges = self.in_edge_count
 
 		cdef double* e = NULL
+		cdef double* p = NULL
 		cdef double* f = <double*> calloc(m*(n+1), sizeof(double))
 
 		# Either fill in a new emissions matrix, or use the one which has
@@ -1474,6 +1477,11 @@ cdef class HiddenMarkovModel(GraphModel):
 					e[l*n + i] += self.state_weights[l]
 		else:
 			e = emissions
+
+		if priors is NULL:
+			p = <double*> calloc(n*self.silent_start, sizeof(double))
+		else:
+			p = priors
 
 		# We must start in the start state, having emitted 0 symbols
 		for i in range(m):
@@ -1520,7 +1528,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				# Now set the table entry for log probability of emitting
 				# index+1 characters and ending in state l
-				f[(i+1)*m + l] = log_probability + e[i + l*n] + _log(priors[i + l*n])
+				f[(i+1)*m + l] = log_probability + e[i + l*n] + p[i + l*n]
 
 			for l in range(self.silent_start, m):
 				# Now do the first pass over the silent states
@@ -1558,11 +1566,15 @@ cdef class HiddenMarkovModel(GraphModel):
 				# Add the previous partial result and update the table entry
 				f[(i+1)*m + l] = pair_lse(f[(i+1)*m + l], log_probability)
 
+		if priors is NULL:
+			free(p)
+
 		if emissions is NULL:
 			free(e)
+
 		return f
 
-	cpdef numpy.ndarray backward(self, sequence):
+	cpdef numpy.ndarray backward(self, sequence, priors=None):
 		"""Run the backward algorithm on the sequence.
 
 		Calculate the probability of each observation being aligned to each
@@ -1597,8 +1609,9 @@ cdef class HiddenMarkovModel(GraphModel):
 		if self.d == 0:
 			raise ValueError("must bake model before using backward algorithm")
 
-		cdef numpy.ndarray sequence_ndarray
+		cdef numpy.ndarray sequence_ndarray, priors_ndarray
 		cdef double* sequence_data
+		cdef double* priors_data = NULL
 		cdef double* b
 		cdef int n = len(sequence), m = len(self.states)
 		cdef int mv = self.multivariate
@@ -1607,8 +1620,12 @@ cdef class HiddenMarkovModel(GraphModel):
 		sequence_ndarray = _check_input(sequence, self)
 		sequence_data = <double*> sequence_ndarray.data
 
+		if priors is not None:
+			priors_ndarray = numpy.log(numpy.array(priors, dtype=numpy.float64, order='F'))
+			priors_data = <double*> priors_ndarray.data
+
 		with nogil:
-			b = self._backward(sequence_data, n, NULL)
+			b = self._backward(sequence_data, priors_data, n, NULL)
 
 		for i in range(n+1):
 			for j in range(m):
@@ -1617,9 +1634,9 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(b)
 		return b_ndarray
 
-	cdef double* _backward(self, double* sequence, int n, double* emissions) nogil:
+	cdef double* _backward(self, double* sequence, double* priors, int n, double* emissions) nogil:
 		cdef int i, ir, k, kr, l, li
-		cdef int p = self.silent_start, m = self.n_states
+		cdef int m = self.n_states
 		cdef int dim = self.d
 
 		cdef void** distributions = <void**> self.distributions_ptr
@@ -1628,6 +1645,7 @@ cdef class HiddenMarkovModel(GraphModel):
 		cdef int* out_edges = self.out_edge_count
 
 		cdef double* e = NULL
+		cdef double* p = NULL
 		cdef double* b = <double*> calloc((n+1)*m, sizeof(double))
 
 		# Either fill in a new emissions matrix, or use the one which has
@@ -1645,6 +1663,11 @@ cdef class HiddenMarkovModel(GraphModel):
 					e[l*n + i] += self.state_weights[l]
 		else:
 			e = emissions
+
+		if priors is NULL:
+			p = <double*> calloc(n*self.silent_start, sizeof(double))
+		else:
+			p = priors
 
 		# We must end in the end state, having emitted len(sequence) symbols
 		if self.finite == 1:
@@ -1740,7 +1763,7 @@ cdef class HiddenMarkovModel(GraphModel):
 					# transition and emission emission probability.
 					log_probability = pair_lse(log_probability,
 						b[(i+1)*m + li] + self.out_transition_log_probabilities[l] +
-						e[i + li*n])
+						e[i + li*n] + p[i + li*n])
 
 				# We can't go from a silent state here to a silent state on the
 				# next symbol, so we're done finding the probability assuming we
@@ -1788,7 +1811,7 @@ cdef class HiddenMarkovModel(GraphModel):
 					# transition and emission emission probability.
 					log_probability = pair_lse(log_probability,
 						b[(i+1)*m + li] + self.out_transition_log_probabilities[l] +
-						e[i + li*n])
+						e[i + li*n] + p[i + li*n])
 
 				for l in range(out_edges[k], out_edges[k+1]):
 					li = self.out_transitions[l]
@@ -1805,11 +1828,14 @@ cdef class HiddenMarkovModel(GraphModel):
 				# get from here to the end, so we can fill in the table entry.
 				b[i*m + k] = log_probability
 
+		if priors is NULL:
+			free(p)
+
 		if emissions is NULL:
 			free(e)
 		return b
 
-	def forward_backward(self, sequence):
+	def forward_backward(self, sequence, priors=None):
 		"""Run the forward-backward algorithm on the sequence.
 
 		This algorithm returns an emission matrix and a transition matrix. The
@@ -1843,24 +1869,30 @@ cdef class HiddenMarkovModel(GraphModel):
 		if self.d == 0:
 			raise ValueError("must bake model before using forward-backward algorithm")
 
-		cdef numpy.ndarray sequence_ndarray
+		cdef numpy.ndarray sequence_ndarray, priors_ndarray
 		cdef double* sequence_data
+		cdef double* priors_data = NULL
 		cdef int n = len(sequence), m = len(self.states)
 		cdef int mv = self.multivariate
 		cdef void** distributions = <void**> self.distributions.data
 
+		if priors is not None:
+			priors_ndarray = numpy.log(numpy.array(priors, dtype=numpy.float64, order='F'))
+			priors_data = <double*> priors_ndarray.data
+
 		sequence_ndarray = _check_input(sequence, self)
 		sequence_data = <double*> sequence_ndarray.data
 
-		return self._forward_backward(sequence_data, n)
+		return self._forward_backward(sequence_data, priors_data, n)
 
-	cdef tuple _forward_backward(self, double* sequence, int n):
+	cdef tuple _forward_backward(self, double* sequence, double* priors, int n):
 		cdef int i, k, j, l, ki, li
 		cdef int m=len(self.states)
 		cdef int dim = self.d
 		cdef double* e = <double*> malloc(n*self.silent_start*sizeof(double))
 		cdef double* f
 		cdef double* b
+		cdef double* p
 
 		cdef void** distributions = <void**> self.distributions_ptr
 
@@ -1876,6 +1908,11 @@ cdef class HiddenMarkovModel(GraphModel):
 		cdef int* out_edges = self.out_edge_count
 		cdef int* tied_states = self.tied_state_count
 
+		if priors is NULL:
+			p = <double*> calloc(n*self.silent_start, sizeof(double))
+		else:
+			p = priors
+
 		# Calculate the emissions table
 		for l in range(self.silent_start):
 			for i in range(n):
@@ -1886,8 +1923,8 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				e[l*n + i] += self.state_weights[l]
 
-		f = self._forward(sequence, NULL, n, e)
-		b = self._backward(sequence, n, e)
+		f = self._forward(sequence, p, n, e)
+		b = self._backward(sequence, p, n, e)
 
 		if self.finite == 1:
 			log_sequence_probability = f[n*m + self.end_index]
@@ -1922,7 +1959,7 @@ cdef class HiddenMarkovModel(GraphModel):
 					log_transition_emission_probability_sum = pair_lse(
 						log_transition_emission_probability_sum,
 						f[i*m + k] + self.out_transition_log_probabilities[l] +
-						e[i + li*n] + b[(i+1)*m + li])
+						e[i + li*n] + p[i + li*n] + b[(i+1)*m + li])
 
 				# Now divide by probability of the sequence to make it given
 				# this sequence, and add as this sequence's contribution to
@@ -1985,6 +2022,8 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(e)
 		free(b)
 		free(f)
+		if priors is NULL:
+			free(p)
 		
 		return expected_transitions_ndarray, emission_weights_ndarray
 
@@ -2317,7 +2356,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 		# Fill in both the F and B DP matrices.
 		f = self._forward(sequence, NULL, n, emissions)
-		b = self._backward(sequence, n, emissions)
+		b = self._backward(sequence, NULL, n, emissions)
 
 		# Find out the probability of the sequence
 		if self.finite == 1:
@@ -2447,7 +2486,7 @@ cdef class HiddenMarkovModel(GraphModel):
 
 		return log_probability_sum, path
 
-	def fit(self, sequences, weights=None, labels=None, stop_threshold=1E-9,
+	def fit(self, sequences, weights=None, priors=None, labels=None, stop_threshold=1E-9,
 		min_iterations=0, max_iterations=1e8, algorithm='baum-welch',
 		pseudocount=None, transition_pseudocount=0, emission_pseudocount=0.0,
 		use_pseudocount=False, inertia=None, edge_inertia=0.0,
@@ -2607,7 +2646,8 @@ cdef class HiddenMarkovModel(GraphModel):
 			# use old code, where we only change class of input
 			# checking input will be in `summarize` function
 			if not isinstance(sequences, BaseGenerator):
-				data_generator = SequenceGenerator(sequences, weights, labels)
+				data_generator = SequenceGenerator(sequences, weights, priors, 
+					labels)
 			else:
 				data_generator = sequences
 		else:
@@ -2625,22 +2665,24 @@ cdef class HiddenMarkovModel(GraphModel):
 					labels = numpy.array(labels)
 
 				data_generator = SequenceGenerator(checked_sequences, weights, 
-					labels)
+					priors, labels)
 			else:
-				checked_sequences, checked_weights, checked_labels = [], [], []
+				checked_sequences, checked_weights = [], []
+				checked_priors, checked_labels = [], []
 
 				for batch in sequences.batches():
 					sequence_ndarray= _check_input(batch[0][0],self)
 					checked_sequences.append(sequence_ndarray)
 					checked_weights.append(batch[1])
+					checked_priors.append(batch[2])
 
-					if len(batch) == 3:
-						checked_labels.append(batch[2][0])
+					if len(batch) == 4:
+						checked_labels.append(batch[3][0])
 					else:
 						checked_labels = None
 
 				data_generator = SequenceGenerator(checked_sequences, checked_weights,
-					checked_labels)
+					checked_priors, checked_labels)
 
 		n = data_generator.shape[0]
 
@@ -2736,7 +2778,7 @@ cdef class HiddenMarkovModel(GraphModel):
 			return self, history
 		return self
 
-	def summarize(self, sequences, weights=None, labels=None, algorithm='baum-welch',
+	def summarize(self, sequences, weights=None, priors=None, labels=None, algorithm='baum-welch',
 		check_input=True):
 		"""Summarize data into stored sufficient statistics for out-of-core
 		training. Only implemented for Baum-Welch training since Viterbi
@@ -2801,8 +2843,8 @@ cdef class HiddenMarkovModel(GraphModel):
 			X = sequences
 
 		if algorithm == 'baum-welch':
-			return sum([self._baum_welch_summarize(sequence, weight)
-				for sequence, weight in zip(X, weights)])
+			return sum([self._baum_welch_summarize(sequence, weight, prior)
+				for sequence, weight, prior in zip(X, weights, priors)])
 		elif algorithm == 'viterbi':
 			return sum([self._viterbi_summarize(sequence, weight)
 				for sequence, weight in zip(X, weights)])
@@ -2810,7 +2852,7 @@ cdef class HiddenMarkovModel(GraphModel):
 			return sum([self._labeled_summarize(sequence, label, weight)
 				for sequence, label, weight in zip(X, labels, weights)])
 
-	cpdef double _baum_welch_summarize(self, numpy.ndarray sequence_ndarray, double weight):
+	cpdef double _baum_welch_summarize(self, numpy.ndarray sequence_ndarray, double weight, priors):
 		"""Python wrapper for the summarization step.
 
 		This is done to ensure compatibility with joblib's multithreading
@@ -2818,18 +2860,24 @@ cdef class HiddenMarkovModel(GraphModel):
 		which joblib can easily wrap.
 		"""
 
-		cdef double* sequence = <double*> sequence_ndarray.data
+		cdef numpy.ndarray priors_ndarray
+		cdef double* sequence_data = <double*> sequence_ndarray.data
+		cdef double* priors_data = NULL
 		cdef int n = sequence_ndarray.shape[0]
 		cdef double log_sequence_probability
 
+		if priors is not None:
+			priors_ndarray = numpy.log(numpy.array(priors, dtype=numpy.float64, order='F'))
+			priors_data = <double*> priors_ndarray.data
+
 		with nogil:
-			log_sequence_probability = self._summarize(sequence, &weight, n,
-				0, self.d)
+			log_sequence_probability = self._bw_summarize(sequence_data, &weight, 
+				priors_data, n, 0, self.d)
 
 		return log_sequence_probability
 
-	cdef double _summarize(self, double* sequence, double* weight, int n,
-		int column_idx, int d) nogil:
+	cdef double _bw_summarize(self, double* sequence, double* weight, 
+		double* priors, int n, int column_idx, int d) nogil:
 		"""Collect sufficient statistics on a single sequence."""
 
 		cdef int i, k, l, li
@@ -2844,12 +2892,18 @@ cdef class HiddenMarkovModel(GraphModel):
 		cdef double* f
 		cdef double* b
 		cdef double* e
+		cdef double* p
 
 		cdef int* tied_edges = self.tied_edge_group_size
 		cdef int* tied_states = self.tied_state_count
 		cdef int* out_edges = self.out_edge_count
 
 		cdef double* weights = <double*> calloc(n, sizeof(double))
+
+		if priors is NULL:
+			p = <double*> calloc(n*self.silent_start, sizeof(double))
+		else:
+			p = priors
 
 		e = <double*> malloc(n*self.silent_start*sizeof(double))
 		for l in range(self.silent_start):
@@ -2862,8 +2916,8 @@ cdef class HiddenMarkovModel(GraphModel):
 
 				e[l*n + i] += self.state_weights[l]
 
-		f = self._forward(sequence, NULL, n, e)
-		b = self._backward(sequence, n, e)
+		f = self._forward(sequence, p, n, e)
+		b = self._backward(sequence, p, n, e)
 
 		if self.finite == 1:
 			log_sequence_probability = f[n*m + self.end_index]
@@ -2896,7 +2950,7 @@ cdef class HiddenMarkovModel(GraphModel):
 							log_transition_emission_probability_sum,
 							f[i*m + k] +
 							self.out_transition_log_probabilities[l] +
-							e[i + li*n] + b[(i+1)*m + li])
+							e[i + li*n] + p[i + li*n] + b[(i+1)*m + li])
 
 					# Now divide by probability of the sequence to make it given
 					# this sequence, and add as this sequence's contribution to
@@ -2969,6 +3023,9 @@ cdef class HiddenMarkovModel(GraphModel):
 		free(weights)
 		free(f)
 		free(b)
+		if priors is NULL:
+			free(p)
+
 		return log_sequence_probability * weight[0]
 
 	cpdef double _viterbi_summarize(self, numpy.ndarray sequence_ndarray, double weight):
@@ -3455,8 +3512,8 @@ cdef class HiddenMarkovModel(GraphModel):
 
 	@classmethod
 	def from_samples(cls, distribution, n_components, X, weights=None,
-		labels=None, algorithm='baum-welch', inertia=None, edge_inertia=0.0,
-		distribution_inertia=0.0, pseudocount=None,
+		priors=None, labels=None, algorithm='baum-welch', inertia=None, 
+		edge_inertia=0.0, distribution_inertia=0.0, pseudocount=None,
 		transition_pseudocount=0, emission_pseudocount=0.0,
 		use_pseudocount=False, stop_threshold=1e-9, min_iterations=0,
 		max_iterations=1e8, n_init=1, init='kmeans++', max_kmeans_iterations=1,
@@ -3730,10 +3787,10 @@ cdef class HiddenMarkovModel(GraphModel):
 			start_probabilities, state_names=state_names, name=name, 
 			ends=end_probabilities)
 
-		_, history = model.fit(data_generator, weights=weights, labels=labels, 
-			stop_threshold=stop_threshold, min_iterations=min_iterations, 
-			max_iterations=max_iterations, algorithm=algorithm, 
-			verbose=verbose, pseudocount=pseudocount,
+		_, history = model.fit(data_generator, weights=weights, priors=priors,
+			labels=labels, stop_threshold=stop_threshold, 
+			min_iterations=min_iterations, max_iterations=max_iterations, 
+			algorithm=algorithm, verbose=verbose, pseudocount=pseudocount,
 			transition_pseudocount=transition_pseudocount,
 			emission_pseudocount=emission_pseudocount,
 			use_pseudocount=use_pseudocount,

@@ -290,6 +290,10 @@ cdef class DiscreteDistribution(Distribution):
 
 		free(encoded_counts)
 
+	def add_counts(self, idx, count):
+		self.encoded_counts[idx] += count
+		self.summaries[1] += count
+
 	def from_summaries(self, inertia=0.0, pseudocount=0.0):
 		"""Use the summaries in order to update the distribution."""
 
